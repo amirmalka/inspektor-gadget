@@ -32,7 +32,8 @@ import (
 )
 
 const (
-	btfMediaType = "application/vnd.gadget.btfgen.v1+binary"
+	btfMediaType   = "application/vnd.gadget.btfgen.v1+binary"
+	kernelTypesVar = "kernelTypes"
 )
 
 var kernelHasBTF func() bool = sync.OnceValue(func() bool {
@@ -98,7 +99,7 @@ func (i *btfgenOperatorInstance) Prepare(gadgetCtx operators.GadgetContext) erro
 	}
 
 	// save the kernel types to be used by the ebpf operator when loading bpf the spec.
-	gadgetCtx.SetVar("kernelTypes", btfSpec)
+	gadgetCtx.SetVar(kernelTypesVar, btfSpec)
 
 	return nil
 }

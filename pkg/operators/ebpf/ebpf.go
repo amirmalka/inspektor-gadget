@@ -54,6 +54,8 @@ const (
 
 	ParamIface       = "iface"
 	ParamTraceKernel = "trace-pipe"
+
+	kernelTypesVar = "kernelTypes"
 )
 
 type param struct {
@@ -535,11 +537,11 @@ func (i *ebpfInstance) Start(gadgetCtx operators.GadgetContext) error {
 	}
 
 	// check if the btfgen operator has stored the kernel types in the context
-	if btfSpecI, ok := gadgetCtx.GetVar("kernelTypes"); ok {
+	if btfSpecI, ok := gadgetCtx.GetVar(kernelTypesVar); ok {
 		gadgetCtx.Logger().Debugf("using kernel types from BTFHub")
 		btfSpec, ok := btfSpecI.(*btf.Spec)
 		if !ok {
-			return fmt.Errorf("invalid BTF spec")
+			return fmt.Errorf("invalid BTF spec: expected btf.Spec, got %T", btfSpecI)
 		}
 		opts.Programs.KernelTypes = btfSpec
 	}
