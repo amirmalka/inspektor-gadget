@@ -1,6 +1,7 @@
 module github.com/inspektor-gadget/inspektor-gadget
 
 go 1.21.0
+toolchain go1.22.2
 
 require (
 	github.com/blang/semver v3.5.1+incompatible
@@ -60,7 +61,7 @@ require (
 	k8s.io/cli-runtime v0.29.4
 	k8s.io/client-go v0.29.4
 	k8s.io/code-generator v0.29.4
-	k8s.io/cri-api v0.29.3
+	k8s.io/cri-api v0.30.0
 	oras.land/oras-go/v2 v2.4.0
 	sigs.k8s.io/controller-runtime v0.17.2
 	sigs.k8s.io/security-profiles-operator v0.8.3
