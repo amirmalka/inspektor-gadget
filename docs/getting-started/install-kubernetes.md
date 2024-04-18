@@ -7,19 +7,23 @@ description: >
 
 <!-- toc -->
 - [Installing kubectl gadget](#installing-kubectl-gadget)
-  * [Using krew](#using-krew)
-  * [Install a specific release](#install-a-specific-release)
-  * [Compile from source](#compile-from-source)
+  - [Using krew](#using-krew)
+  - [Install a specific release](#install-a-specific-release)
+  - [Compile from source](#compile-from-source)
 - [Installing in the cluster](#installing-in-the-cluster)
-  * [Quick installation](#quick-installation)
-  * [Choosing the gadget image](#choosing-the-gadget-image)
-  * [Deploy to specific nodes](#deploy-to-specific-nodes)
-  * [Deploying into a custom namespace](#deploying-into-a-custom-namespace)
-  * [Hook Mode](#hook-mode)
-  * [Specific Information for Different Platforms](#specific-information-for-different-platforms)
-    + [Minikube](#minikube)
+  - [Quick installation](#quick-installation)
+  - [Choosing the gadget image](#choosing-the-gadget-image)
+  - [Deploy to specific nodes](#deploy-to-specific-nodes)
+  - [Deploying into a custom namespace](#deploying-into-a-custom-namespace)
+  - [Hook Mode](#hook-mode)
+  - [Deploying with an AppArmor profile](#deploying-with-an-apparmor-profile)
+  - [Specific Information for Different Platforms](#specific-information-for-different-platforms)
+    - [Minikube](#minikube)
 - [Uninstalling from the cluster](#uninstalling-from-the-cluster)
 - [Version skew policy](#version-skew-policy)
+- [Installing `ig`](#installing-ig)
+  - [Install a specific release](#install-a-specific-release-1)
+  - [Compile from source](#compile-from-source-1)
 - [Experimental features](#experimental-features)
 <!-- /toc -->
 
@@ -59,7 +63,7 @@ $ kubectl gadget version
 ### Compile from source
 
 To build Inspektor Gadget from source, you'll need to have a Golang version
-1.21 or higher installed.
+1.22 or higher installed.
 
 ```bash
 $ git clone https://github.com/inspektor-gadget/inspektor-gadget.git
