@@ -489,7 +489,8 @@ func newAuthClient(repository string, authOptions *AuthOptions) (*oras_auth.Clie
 }
 
 func craftSignatureTag(digest string) (string, error) {
-	// WARNING:
+	// WARNING: cosign is considering changing the scheme for
+	// publishing/retrieving sigstore bundles to/from an OCI registry, see:
 	// https://sigstore.slack.com/archives/C0440BFT43H/p1712253122721879?thread_ts=1712238666.552719&cid=C0440BFT43H
 	// https://github.com/sigstore/cosign/pull/3622
 	parts := strings.Split(digest, ":")
@@ -537,65 +538,61 @@ func getSignature(ctx context.Context, repo *remote.Repository, signatureTag str
 	return signature, payloadTag, nil
 }
 
-func getPayload(ctx context.Context, repo *remote.Repository, payloadTag string, imageDigest string) (string, error) {
+func getPayload(ctx context.Context, repo *remote.Repository, payloadTag string) (*payload.SimpleContainerImage, error) {
 	// The payload is stored as a blob, so we fetch bytes from the blob store and
 	// not the manifest one.
 	_, payloadBytes, err := oras.FetchBytes(ctx, repo.Blobs(), payloadTag, oras.DefaultFetchBytesOptions)
 	if err != nil {
-		return "", fmt.Errorf("getting payload bytes: %w", err)
+		return nil, fmt.Errorf("getting payload bytes: %w", err)
 	}
 
 	img := &payload.SimpleContainerImage{}
 	err = json.Unmarshal(payloadBytes, img)
 	if err != nil {
-		return "", fmt.Errorf("decoding payload: %w", err)
+		return nil, fmt.Errorf("decoding payload: %w", err)
 	}
 
-	if img.Critical.Image.DockerManifestDigest != imageDigest{
-		return "", fmt.Errorf("payload digest does not correspond to image: expected %s, got %s", imageDigest, img.Critical.Image.DockerManifestDigest)
-	}
-
-	return string(payloadBytes), nil
+	return img, nil
 }
 
-func getSigningInformation(ctx context.Context, image string, authOpts *AuthOptions) (string, string, error) {
+func getSigningInformation(ctx context.Context, image string, authOpts *AuthOptions) (string, string, *payload.SimpleContainerImage, error) {
 	imageStore, err := getLocalOciStore()
 	if err != nil {
-		return "", "", fmt.Errorf("getting local oci store: %w", err)
+		return "", "", nil, fmt.Errorf("getting local oci store: %w", err)
 	}
 
 	imageRef, err := normalizeImageName(image)
 	if err != nil {
-		return "", "", fmt.Errorf("normalizing image name: %w", err)
+		return "", "", nil, fmt.Errorf("normalizing image name: %w", err)
 	}
 
 	desc, err := imageStore.Resolve(ctx, imageRef.String())
 	if err != nil {
-		return "", "", fmt.Errorf("resolving image %q: %w", image, err)
+		return "", "", nil, fmt.Errorf("resolving image %q: %w", image, err)
 	}
 
 	imageDigest := desc.Digest.String()
 	signatureTag, err := craftSignatureTag(imageDigest)
 	if err != nil {
-		return "", "", fmt.Errorf("crafting signature tag: %w", err)
+		return "", "", nil, fmt.Errorf("crafting signature tag: %w", err)
 	}
 
 	repo, err := newRepository(imageRef, authOpts)
 	if err != nil {
-		return "", "", fmt.Errorf("creating repository: %w", err)
+		return "", "", nil, fmt.Errorf("creating repository: %w", err)
 	}
 
 	signature, payloadTag, err := getSignature(ctx, repo, signatureTag)
 	if err != nil {
-		return "", "", fmt.Errorf("getting signature: %w", err)
+		return "", "", nil, fmt.Errorf("getting signature: %w", err)
 	}
 
-	payloadContent, err := getPayload(ctx, repo, payloadTag, imageDigest)
+	payloadImage, err := getPayload(ctx, repo, payloadTag)
 	if err != nil {
-		return "", "", fmt.Errorf("getting payload: %w", err)
+		return "", "", nil, fmt.Errorf("getting payload: %w", err)
 	}
 
-	return signature, payloadContent, nil
+	return signature, imageDigest, payloadImage, nil
 }
 
 func newVerifier(publicKey []byte) (signature.Verifier, error) {
@@ -618,7 +615,7 @@ func newVerifier(publicKey []byte) (signature.Verifier, error) {
 }
 
 func verifyImage(ctx context.Context, image string, authOpts *AuthOptions) error {
-	sign, payload, err := getSigningInformation(ctx, image, authOpts)
+	sign, imageDigest, payloadImage, err := getSigningInformation(ctx, image, authOpts)
 	if err != nil {
 		return fmt.Errorf("getting payload and signature: %w", err)
 	}
@@ -633,9 +630,21 @@ func verifyImage(ctx context.Context, image string, authOpts *AuthOptions) error
 		return fmt.Errorf("creating verifier: %w", err)
 	}
 
-	err = verifier.VerifySignature(bytes.NewReader(decodedSignature), strings.NewReader(payload))
+	payloadBytes, err := json.Marshal(payloadImage)
+	if err != nil {
+		return fmt.Errorf("encoding payload: %w", err)
+	}
+
+	err = verifier.VerifySignature(bytes.NewReader(decodedSignature), bytes.NewReader(payloadBytes))
 	if err != nil {
 		return fmt.Errorf("verifying signature: %w", err)
+	}
+
+	// We should not read the payload before confirming it was signed, so let's
+	// do this check once it was confirmed to be signed:
+	// https://github.com/containers/image/blob/main/docs/containers-signature.5.md#the-cryptographic-signature
+	if payloadImage.Critical.Image.DockerManifestDigest != imageDigest {
+		return fmt.Errorf("payload digest does not correspond to image: expected %s, got %s", imageDigest, payloadImage.Critical.Image.DockerManifestDigest)
 	}
 
 	return nil
