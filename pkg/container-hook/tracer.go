@@ -154,6 +154,7 @@ var runtimePaths = []string{
 	"/usr/bin/crun",
 	"/usr/bin/conmon",
 	"/var/lib/rancher/k3s/data/current/bin/runc",
+	"/var/lib/rancher/rke2/bin/runc",
 }
 
 // initFanotify initializes the fanotify API with the flags we need
