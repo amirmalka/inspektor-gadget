@@ -85,6 +85,9 @@ type Tracer[Event any] struct {
 	// mu protects attachments from concurrent access
 	// AttachContainer and DetachContainer can be called in parallel
 	mu sync.Mutex
+
+	// recordPool will pool perf.Record objects to avoid allocations.
+	recordPool sync.Pool
 }
 
 func (t *Tracer[Event]) newAttachment(
@@ -139,6 +142,11 @@ func (t *Tracer[Event]) newAttachment(
 func NewTracer[Event any]() (_ *Tracer[Event], err error) {
 	t := &Tracer[Event]{
 		attachments: make(map[uint64]*attachment),
+	}
+
+	// Initialize the sync.Pool to create new perf.Record objects when the pool is empty.
+	t.recordPool.New = func() any {
+		return new(perf.Record)
 	}
 
 	// Keep in sync with tail_call map in bpf/dispatcher.bpf.c
@@ -320,8 +328,15 @@ func (t *Tracer[Event]) listen(
 	processEvent func(rawSample []byte, netns uint64) (*Event, error),
 ) {
 	for {
-		record, err := t.perfRd.Read()
+		// Get a reusable record from the pool
+		record := t.recordPool.Get().(*perf.Record)
+
+		// Read into the existing record to avoid allocating a new one
+		err := t.perfRd.ReadInto(record)
+
 		if err != nil {
+			// Return record to the pool before we exit or continue the loop
+			t.recordPool.Put(record)
 			if errors.Is(err, perf.ErrClosed) {
 				return
 			}
@@ -334,11 +349,15 @@ func (t *Tracer[Event]) listen(
 		if record.LostSamples != 0 {
 			msg := fmt.Sprintf("lost %d samples", record.LostSamples)
 			t.eventHandler(baseEvent(types.Warn(msg)))
+			// Return record to the pool before continuing
+			t.recordPool.Put(record)
 			continue
 		}
 
 		if len(record.RawSample) < 4 {
 			t.eventHandler(baseEvent(types.Err("record too small")))
+			// Return record to the pool before continuing
+			t.recordPool.Put(record)
 			continue
 		}
 
@@ -347,12 +366,19 @@ func (t *Tracer[Event]) listen(
 		event, err := processEvent(record.RawSample, uint64(netns))
 		if err != nil {
 			t.eventHandler(baseEvent(types.Err(err.Error())))
+			// Return record to the pool before continuing
+			t.recordPool.Put(record)
 			continue
 		}
 		if event == nil {
+			// Return record to the pool before continuing
+			t.recordPool.Put(record)
 			continue
 		}
 		t.eventHandler(event)
+
+		// Return the record to the pool after processing
+		t.recordPool.Put(record)
 	}
 }
 

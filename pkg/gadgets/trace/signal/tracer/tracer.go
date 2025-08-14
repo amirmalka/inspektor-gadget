@@ -22,19 +22,19 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"unsafe"
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/perf"
+	"golang.org/x/sys/unix"
 
 	gadgetcontext "github.com/inspektor-gadget/inspektor-gadget/pkg/gadget-context"
 	"github.com/inspektor-gadget/inspektor-gadget/pkg/gadgets"
 	"github.com/inspektor-gadget/inspektor-gadget/pkg/gadgets/trace/signal/types"
 	eventtypes "github.com/inspektor-gadget/inspektor-gadget/pkg/types"
-
-	"golang.org/x/sys/unix"
 )
 
 //go:generate go run github.com/cilium/ebpf/cmd/bpf2go -target bpfel -cc clang -cflags ${CFLAGS} -type event sigsnoop ./bpf/sigsnoop.bpf.c --
@@ -62,6 +62,9 @@ type Tracer struct {
 
 	enricher      gadgets.DataEnricherByMntNs
 	eventCallback func(*types.Event)
+
+	// recordPool will pool perf.Record objects to avoid allocations.
+	recordPool sync.Pool
 }
 
 func signalIntToString(signal int) string {
@@ -75,6 +78,11 @@ func NewTracer(config *Config, enricher gadgets.DataEnricherByMntNs,
 		config:        config,
 		enricher:      enricher,
 		eventCallback: eventCallback,
+	}
+
+	// Initialize the sync.Pool to create new perf.Record objects when the pool is empty.
+	t.recordPool.New = func() any {
+		return new(perf.Record)
 	}
 
 	if err := t.install(); err != nil {
@@ -184,8 +192,15 @@ func (t *Tracer) install() error {
 
 func (t *Tracer) run() {
 	for {
-		record, err := t.reader.Read()
+		// Get a reusable record from the pool
+		record := t.recordPool.Get().(*perf.Record)
+
+		// Read into the existing record to avoid allocating a new one
+		err := t.reader.ReadInto(record)
+
 		if err != nil {
+			// Return record to the pool before we exit or continue the loop
+			t.recordPool.Put(record)
 			if errors.Is(err, perf.ErrClosed) {
 				// nothing to do, we're done
 				return
@@ -199,6 +214,8 @@ func (t *Tracer) run() {
 		if record.LostSamples > 0 {
 			msg := fmt.Sprintf("lost %d samples", record.LostSamples)
 			t.eventCallback(types.Base(eventtypes.Warn(msg)))
+			// Return record to the pool before continuing
+			t.recordPool.Put(record)
 			continue
 		}
 
@@ -224,6 +241,9 @@ func (t *Tracer) run() {
 		}
 
 		t.eventCallback(&event)
+
+		// Return the record to the pool after processing
+		t.recordPool.Put(record)
 	}
 }
 

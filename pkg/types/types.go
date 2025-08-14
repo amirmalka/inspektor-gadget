@@ -401,6 +401,10 @@ func (e *Event) GetMessage() string {
 	return e.Message
 }
 
+func (e *Event) GetTimestamp() Time {
+	return e.Timestamp
+}
+
 func Err(msg string) Event {
 	return Event{
 		CommonData: CommonData{

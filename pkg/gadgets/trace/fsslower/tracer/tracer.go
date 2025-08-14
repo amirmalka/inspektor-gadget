@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sync"
 	"unsafe"
 
 	"github.com/cilium/ebpf"
@@ -57,6 +58,9 @@ type Tracer struct {
 	statfsEnterLink link.Link
 	statfsExitLink  link.Link
 	reader          *perf.Reader
+
+	// recordPool will pool perf.Record objects to avoid allocations.
+	recordPool sync.Pool
 }
 
 type fsConf struct {
@@ -117,6 +121,11 @@ func NewTracer(config *Config, enricher gadgets.DataEnricherByMntNs,
 		config:        config,
 		enricher:      enricher,
 		eventCallback: eventCallback,
+	}
+
+	// Initialize the sync.Pool to create new perf.Record objects when the pool is empty.
+	t.recordPool.New = func() any {
+		return new(perf.Record)
 	}
 
 	if err := t.install(); err != nil {
@@ -251,8 +260,15 @@ var ops = []string{"R", "W", "O", "F", "S"}
 
 func (t *Tracer) run() {
 	for {
-		record, err := t.reader.Read()
+		// Get a reusable record from the pool
+		record := t.recordPool.Get().(*perf.Record)
+
+		// Read into the existing record to avoid allocating a new one
+		err := t.reader.ReadInto(record)
+
 		if err != nil {
+			// Return record to the pool before we exit or continue the loop
+			t.recordPool.Put(record)
 			if errors.Is(err, perf.ErrClosed) {
 				// nothing to do, we're done
 				return
@@ -266,6 +282,8 @@ func (t *Tracer) run() {
 		if record.LostSamples > 0 {
 			msg := fmt.Sprintf("lost %d samples", record.LostSamples)
 			t.eventCallback(types.Base(eventtypes.Warn(msg)))
+			// Return record to the pool before continuing
+			t.recordPool.Put(record)
 			continue
 		}
 
@@ -291,6 +309,9 @@ func (t *Tracer) run() {
 		}
 
 		t.eventCallback(&event)
+
+		// Return the record to the pool after processing
+		t.recordPool.Put(record)
 	}
 }
 

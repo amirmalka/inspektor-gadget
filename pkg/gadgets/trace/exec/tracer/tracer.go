@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sync"
 	"unsafe"
 
 	"github.com/cilium/ebpf"
@@ -101,6 +102,9 @@ type Tracer struct {
 	exitAtLink    link.Link
 	securityLink  link.Link
 	reader        *perf.Reader
+
+	// recordPool will pool perf.Record objects to avoid allocations.
+	recordPool sync.Pool
 }
 
 func NewTracer(config *Config, enricher gadgets.DataEnricherByMntNs,
@@ -110,6 +114,11 @@ func NewTracer(config *Config, enricher gadgets.DataEnricherByMntNs,
 		config:        config,
 		enricher:      enricher,
 		eventCallback: eventCallback,
+	}
+
+	// Initialize the sync.Pool to create new perf.Record objects when the pool is empty.
+	t.recordPool.New = func() any {
+		return new(perf.Record)
 	}
 
 	if err := t.install(); err != nil {
@@ -207,8 +216,15 @@ func (t *Tracer) install() error {
 
 func (t *Tracer) run() {
 	for {
-		record, err := t.reader.Read()
+		// Get a reusable record from the pool
+		record := t.recordPool.Get().(*perf.Record)
+
+		// Read into the existing record to avoid allocating a new one
+		err := t.reader.ReadInto(record)
+
 		if err != nil {
+			// Return record to the pool before we exit or continue the loop
+			t.recordPool.Put(record)
 			if errors.Is(err, perf.ErrClosed) {
 				// nothing to do, we're done
 				return
@@ -222,6 +238,8 @@ func (t *Tracer) run() {
 		if record.LostSamples > 0 {
 			msg := fmt.Sprintf("lost %d samples", record.LostSamples)
 			t.eventCallback(types.Base(eventtypes.Warn(msg)))
+			// Return record to the pool before continuing
+			t.recordPool.Put(record)
 			continue
 		}
 
@@ -251,7 +269,9 @@ func (t *Tracer) run() {
 		}
 
 		argsCount := 0
-		buf := []byte{}
+		// Using a pre-allocated buffer can be an additional optimization if needed,
+		// but let's focus on the perf.Record pooling first.
+		buf := make([]byte, 0, 256)
 		args := record.RawSample[unsafe.Offsetof(execsnoopEvent{}.Args):]
 
 		if t.config.GetPaths {
@@ -267,7 +287,8 @@ func (t *Tracer) run() {
 			if c == 0 {
 				event.Args = append(event.Args, string(buf))
 				argsCount = 0
-				buf = []byte{}
+				// Reset buffer for next argument
+				buf = buf[:0]
 			} else {
 				buf = append(buf, c)
 			}
@@ -278,6 +299,9 @@ func (t *Tracer) run() {
 		}
 
 		t.eventCallback(&event)
+
+		// Return the record to the pool after processing
+		t.recordPool.Put(record)
 	}
 }
 

@@ -140,7 +140,9 @@ int ig_seccomp_e(struct bpf_raw_tracepoint_args *ctx)
 	}
 
 	// Record the syscall
-	syscall_bitmap[id] = 0x01;
+	if (syscall_bitmap[id] != 0x01) {
+		syscall_bitmap[id] = 0x01;
+	}
 
 	return 0;
 }
